@@ -1,0 +1,607 @@
+---
+title: "TimePerception_analysis"
+author: "Barbora Ferusová"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+> Conditions: 1 is slow, 2 is normal, and 3 is fast Real timer durations: Slow:6 Normal:5 Fast:4
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/barbo/OneDrive/Počítač/3rd semester/PA/Project/PercAct-Time-Perception")
+knitr::opts_knit$set(root.dir = normalizePath('C:/Users/barbo/OneDrive/Počítač/3rd semester/PA/Project/PercAct-Time-Perception'))
+
+pacman::p_load(
+  tidyverse,
+  gridExtra, 
+  dplyr, 
+  ggplot2,
+  readr,
+  tibble,
+  kableExtra,
+  pastecs,
+  car,
+  WRS2
+)
+
+```
+
+### Import logfiles and merge
+
+```{r}
+# List CSV files in the Logfiles folder
+files <- list.files("Logfiles", pattern = "\\.csv$", full.names = TRUE)
+
+# Read and combine all CSV files
+df <- do.call(rbind, lapply(files, read.csv))
+
+#delete the X column
+df <- df[-1]
+```
+
+### Correct the time estimation
+
+```{r}
+# Reshape the data from wide to long format and select relevant columns
+long_data <- pivot_longer(df, cols = starts_with(c("Beep_Time", "Button_Estimate", "Written_Estimate")), 
+                          names_to = "Type", 
+                          values_to = "Value")
+
+# Extract the number from the Type column
+long_data$Time <- gsub("\\D", "", long_data$Type)
+long_data$Type <- gsub("\\d", "", long_data$Type)
+
+# Reshape the data back to wide format and select relevant columns
+reshaped_data <- pivot_wider(long_data, names_from = Type, values_from = Value)
+
+# Combine reshaped data with the original columns
+cleaned_df<- cbind(df[, -which(names(df) %in% grep("^Beep_Time|^Button_Estimate|^Written_Estimate", names(df)))], reshaped_data)
+
+# Distinguish between tone estimation trials
+cleaned_df$Time <- as.numeric(cleaned_df$Time)
+cleaned_df <- cleaned_df %>%
+  mutate(Phase = ifelse(Time >= 1 & Time <= 6, "baseline", "effect"))
+
+write.csv(cleaned_df, "cleaned_data.csv", row.names = FALSE)
+
+```
+
+### Get survey data
+
+```{r}
+survey_df <- read_csv("Survey_responses.csv")
+survey_df <- survey_df[-1]
+```
+
+### Merge PsychoPy and survey data
+
+```{r}
+merged_df <- merge(cleaned_df, survey_df, by = c("ID", "Condition"))
+# Rename survey columns that will be used in analysis
+merged_df <- merged_df %>% 
+  rename(
+    satisfaction = "How well do you think you performed in the lego building task?",
+    enjoyment = "How much did you enjoy the lego building task?",
+    stress = "How stressed were you during the lego building task?",
+    difficulty = "How difficult was the lego building task?",
+    focus = "How focused were you during the lego building task?",
+    perceived_speed_of_time = "How fast did the time seem to be passing by during the lego building task?",
+    tired = "How tiring was the lego building task?",
+    attention_timer = "How much attention did you pay to the timer during the lego building task?",
+    knows_sixbricks = "Where you familiar with the lego house six bricks challange, before the experiment?",
+    lego_exp = "How much experience did you have with building legos in the past?",
+    perceived_time = "What was the duration of the lego task?",
+    action = "During the tone estimation task, how did you estimate its time?",
+    models_done = "Number of lego models done",
+    models_correct = "Number of lego models done correctly",
+    written_estimate = "Written_Estimate_",
+    button_estimate = "Button_Estimate_",
+    beep_time = "Beep_Time"
+  )
+```
+
+# Some more cleaning
+
+```{r}
+# set NAs in lego experience to 0
+merged_df$lego_exp[is.na(merged_df$lego_exp)] <- 0
+
+# delete characters from perceived_time
+merged_df$perceived_time <- gsub("[^0-9]", "", merged_df$perceived_time)
+
+
+
+merged_df$Phase <- as.factor(merged_df$Phase)
+merged_df$Time <- as.factor(merged_df$Time)
+merged_df$ID <- as.factor(merged_df$ID)
+merged_df$Gender <- as.factor(merged_df$Gender)
+merged_df$Condition <- as.factor(merged_df$Condition)
+merged_df$button_estimate <- as.numeric(merged_df$button_estimate)
+merged_df$action <- as.character(merged_df$action)
+
+
+```
+
+### Deal with faulty data points using mean imputation
+
+```{r}
+# 1. participant 13, button estimate 7
+# Calculate the mean
+button7_cond1_mean <- merged_df %>% 
+  filter(ID != 13, Time == 7, Condition == 1) %>% 
+  summarise(mean_value = mean(button_estimate, na.rm = TRUE)) %>%
+  pull(mean_value)
+
+# Identify the row and replace the value
+row_to_change <- which(merged_df$ID == 13 & merged_df$Time == 7)
+merged_df$button_estimate[row_to_change] <- button7_cond1_mean
+
+# 2. participant 5, button 1, same method
+# Calculate the mean
+button1_mean <- merged_df %>% 
+  filter(ID != 5, Time == 1) %>% 
+  summarise(mean_value = mean(button_estimate, na.rm = TRUE)) %>%
+  pull(mean_value)
+
+# Identify the row and replace the value
+row_to_change <- which(merged_df$ID == 5 & merged_df$Time == 1)
+merged_df$button_estimate[row_to_change] <- button1_mean
+
+```
+
+## Calculate other needed metrics
+
+```{r}
+# make the "productivity" variable which is models_done/300seconds for Condition = 2
+merged_df <- merged_df %>%
+  mutate(productivity = case_when(
+    Condition == 2 ~ models_done / 300,
+    Condition == 1 ~ models_done / 360,
+    Condition == 3 ~ models_done / 120
+  ))
+
+# make an estimation_effect that shows the difference in time perceptions where negative values mean underestimation (for example in fast condition) and positive mean overestimation (for example in slow condition)
+merged_df <- merged_df %>%
+  mutate(button_accuracy = abs(button_estimate - beep_time))
+merged_df <- merged_df %>%
+  mutate(written_accuracy = abs(written_estimate - beep_time))
+
+
+# beep time higher than estimate => negative value, thus underestimation
+# I swear I have to write this down over and over cuz I keep forgetting
+```
+
+
+
+# Exploratory phase
+```{r}
+merged_df %>% 
+  filter(Condition ==1) %>% 
+  group_by(Gender) %>% 
+  distinct(ID) %>% 
+  count()
+
+merged_df %>% 
+  filter(Condition ==2) %>% 
+  group_by(Gender) %>% 
+  distinct(ID) %>% 
+  count()
+
+merged_df %>% 
+  filter(Condition ==3) %>% 
+  group_by(Gender) %>% 
+  distinct(ID) %>% 
+  count()
+
+merged_df %>% 
+  filter(Condition==2) %>% 
+  group_by(Gender) %>% 
+  summarise(mean(productivity))
+
+merged_df %>% 
+  group_by(Condition) %>% 
+  summarise(mean(productivity))
+```
+> I need to note that the Fast condition is mostly composed by Female participants.
+> In the control condition, Male participants were slightly more productive.
+> Productivity in the Fast condition jumped by ~0.049 from the control. While it only increased by ~0.004 in the slow condition where participants had more time.
+
+
+## Handling the action variable
+
+```{r}
+# 1. Split and sort options
+merged_df <- merged_df %>%
+  mutate(action_sorted = sapply(strsplit(as.character(action), ", "), function(x) paste(sort(x), collapse = ", ")))
+
+# 2. Create a mapping from sorted actions to unique numbers
+unique_actions <- unique(merged_df$action_sorted)
+action_mapping <- setNames(seq_along(unique_actions), unique_actions)
+
+# 3. Apply the mapping to create a numeric variable
+merged_df <- merged_df %>%
+  mutate(action_numeric = action_mapping[action_sorted])
+
+# CREATE NICE LEGEND
+# Generate counts for each action_numeric
+actions_counted <- merged_df %>%
+  filter(Time==1) %>% 
+  group_by(action_numeric) %>%
+  summarise(count = n())
+
+# Create a table with unique action_numeric and corresponding action_sorted
+distinct_actions <- merged_df %>%
+  select(action_numeric, action_sorted) %>%
+  distinct() %>% 
+  rename(`Estimation Method Number` = action_numeric, `Estimation Method` = action_sorted)
+
+
+# Merge the counts with the distinct actions
+legend_table <- left_join(distinct_actions, actions_counted, by = c( "Estimation Method Number" = "action_numeric"))
+
+kable_table <- kable(legend_table, format = "html", caption = "Legend of Actions with Counts") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+kable_table
+```
+```{r}
+# create separate dfs for baseline and effect estimations
+baseline_df <- subset(merged_df, Phase == "baseline")
+effect_df <- subset(merged_df, Phase == "effect")
+```
+
+###After being exposed to a sped/slowed down up timer while performing a lego recreation task, participants will estimate tone durations as shorter/longer.
+
+```{r}
+# average difference between baseline and effect estimates 
+
+# Calculate mean_baseline_perception
+baseline_df <- baseline_df %>% 
+  group_by(ID) %>% 
+  mutate(mean_baseline_accuracy = mean(button_accuracy, na.rm = TRUE))
+
+# Calculate mean_effect_perception
+effect_df<- effect_df %>% 
+  group_by(ID) %>% 
+  mutate(mean_effect_accuracy = mean(button_accuracy, na.rm = TRUE))
+
+# Join the two dataframes
+effect_vs_baseline <- left_join(baseline_df, effect_df, by = "ID")
+
+effect_vs_baseline <- effect_vs_baseline %>% 
+  mutate(experimental_effect = abs( mean_baseline_accuracy - mean_effect_accuracy ))
+# if im less accurate in effect i was more affected... so the more accurate after lego task the less affected 
+
+merged_df <- left_join(merged_df, effect_vs_baseline, by = "ID")
+# now we have average accuracy for both baseline and effect for each ID, meaning we have two averages for each ID
+# now we need the difference of the averages across conditions
+# slow condition
+merged_df %>% 
+  filter(Condition==1) %>% 
+  summarise(avg_baseline_acc= mean(mean_baseline_accuracy),
+            avg_effect_acc = mean(mean_effect_accuracy),
+            difference =  abs(avg_effect_acc - avg_baseline_acc))
+# fast condition
+merged_df %>% 
+  filter(Condition==3) %>% 
+  summarise(avg_baseline_acc = mean(mean_baseline_accuracy),
+            avg_effect_acc = mean(mean_effect_accuracy),
+            difference =  abs(avg_effect_acc - avg_baseline_acc))
+
+# control condition
+merged_df %>% 
+  filter(Condition==2) %>% 
+  summarise(avg_baseline_acc = mean(mean_baseline_accuracy),
+            avg_effect_acc = mean(mean_effect_accuracy),
+            difference =  abs(avg_effect_acc- avg_baseline_acc))
+
+# lower value means more they underestimated
+
+```
+> Slow condition underestimated less after the lego task (meaning they leaned more towards overestimating, thus perceiving the tone to last longer after being exposed to a slowed down timer). We could say that time was passing slower for these participants.
+>> -0.61 vs. -0.53 is a pretty big effect.
+> Fast condition followed the same trend but the effect was smaller (-0.53 vs. -0.51). Meaning they still tended to overestimating but but not as much as the slow condition. Could this mean that time "flied" for them?
+
+### Participants that were presented with a rigged timer will estimate tone durations less accurately than before the lego task.
+> Slow condition was more accurate by 0.08 compared to before Lego Task.
+> Control condition was more accurate by 0.06
+> Fast condition was more accurate by 0.02
+> So the hypothesis is only true for the faster condition. (Everyone got close to 0, or estimating correctly, but the fast condition did not get much better)
+
+
+
+> Oposite effect in written estimation in slower condition. (They overestimated less)
+> Oposite effect in written estimation in faster condition. (They overestimated less, but not as big difference)
+
+```{r}
+write.csv(merged_df, "merged_data.csv", row.names = FALSE)
+```
+
+### Plots
+```{r}
+# plotting the distribution of time perceptions through button estimates
+merged_df %>% 
+  filter(Phase == "baseline") %>% 
+ggplot(aes(x = button_accuracy)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Button Estimates before Lego Task", x = "Button Estimate", y = "Frequency")
+
+merged_df %>% 
+  filter(Phase == "effect" | Condition == 1) %>% 
+ggplot(aes(x = button_accuracy)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Button Estimates after Slowed Timer", x = "Button Estimate", y = "Frequency")
+
+merged_df %>% 
+  filter(Phase == "effect" | Condition == 3) %>% 
+ggplot(aes(x = button_accuracy)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Button Estimates after Sped up Timer", x = "Button Estimate", y = "Frequency")
+
+
+merged_df %>% 
+  filter(Phase == "effect" | Condition == 2) %>% 
+ggplot(aes(x = button_accuracy)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Button Estimates after Regular Timer", x = "Button Estimate", y = "Frequency")
+
+```
+
+```{r}
+
+# plotting the distribution of time perceptions through written estimates
+merged_df %>% 
+  filter(Phase == "baseline") %>% 
+ggplot(aes(x = written_accuracy)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Button Estimates before Lego Task", x = "Button Estimate", y = "Frequency")
+
+merged_df %>% 
+  filter(Phase == "effect" | Condition == 1) %>% 
+ggplot(aes(x = written_accuracy)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Button Estimates after Slowed Timer", x = "Button Estimate", y = "Frequency")
+
+merged_df %>% 
+  filter(Phase == "effect" | Condition == 3) %>% 
+ggplot(aes(x = written_accuracy)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Button Estimates after Sped up Timer", x = "Button Estimate", y = "Frequency")
+
+
+merged_df %>% 
+  filter(Phase == "effect" | Condition == 2) %>% 
+ggplot(aes(x = written_accuracy)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Button Estimates after Regular Timer", x = "Button Estimate", y = "Frequency")
+
+```
+
+
+```{r}
+# plot the difference between button and written estimation perception in baseline AND effect trials
+merged_df %>% 
+  filter(Condition == 1) %>% 
+ggplot(aes(x = factor(Phase), y = button_accuracy, fill = Phase)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Button Estimate before and after in Slow Condition", x = "Phase", y = "Button Estimate")
+
+merged_df %>% 
+  filter(Condition == 3) %>% 
+ggplot(aes(x = factor(Phase), y = button_accuracy, fill = Phase)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Button Estimate before and after in Fast Condition", x = "Phase", y = "Button Estimate")
+
+merged_df %>% 
+  filter(Condition == 2) %>% 
+ggplot(aes(x = factor(Phase), y = button_accuracy, fill = Phase)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Button Estimate before and after in Normal Condition", x = "Phase", y = "Button Estimate")
+```
+
+> It seems like in all conditions, after completing the Lego Task participants tend to overestimate the tune duration. This can be due to boredom caused by the redundancy of the experiment.
+
+
+```{r}
+merged_df %>% 
+  filter(Phase=="effect") %>% 
+ggplot( aes(x = factor(Condition), y = button_accuracy, fill = Condition)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Button Estimate by Condition after Lego Task", x = "Condition", y = "Button Estimate")
+
+```
+
+```{r}
+merged_df %>% 
+ggplot( aes(x = factor(Condition), y = productivity, fill = Condition)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Productivity by Condition", x = "Condition", y = "Productivity")
+```
+> Big diffference in productivity in the Fast condition. Seems like they did more in the time given.
+> Slow might be better than condition just because they objectively had more time.
+
+### While being exposed to a sped up/slowed down timer when they’re performing a lego recreation task, participants will report feeling more/less focused on the task.
+```{r}
+merged_df %>% 
+  group_by(Condition) %>% 
+  summarise(mean(focus))
+```
+> Focus reported was highest in the slow condition, second highest in the fast condition. 
+
+### Which action brings more accurate estimates?
+```{r}
+merged_df$action_numeric <- as.factor(merged_df$action_numeric )
+action_means<- merged_df %>% 
+  group_by(action_numeric) %>% 
+  summarise(mean_estimation = mean(button_accuracy))
+
+ggplot(action_means, aes(x = action_numeric, y = mean_estimation)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_x_discrete(drop = T) +  # Ensure all x-axis labels are shown
+  theme_minimal() +
+  labs(x = "Action Numeric", y = "Mean Estimation Effect Button", 
+       title = "Mean Estimation Effect Button by Action Number")
+```
+> Participants (n=2) using 5 (reimagining the sound in your head) tend to underestimate and be very inaccurate
+> Participant using 10 (tapping along) overestimated the duration and was fairly innacurate.
+> 6 and 2 (using mixed methods) is most accurate but both only used by one participant 
+> The most used method, 1 or counting in your mind, was moderately accurate
+
+### Comparing genders
+```{r}
+merged_df %>% 
+ggplot(aes(x = factor(Condition), y = productivity, fill = Gender)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Productivity by Condition and Gender", x = "Condition", y = "Productivity") +
+  facet_wrap(merged_df$Gender)
+```
+
+### Scatterplots
+```{r}
+ggplot(merged_df, aes(x = productivity, y = stress)) +
+  geom_point(aes(color = Condition), alpha = 0.7, position = position_jitter(width = 0.1, height = 0.1)) +
+  theme_minimal() +
+  labs(title = "Productivity vs. Stress", x = "Productivity", y = "Stress")
+
+```
+
+# NORMALITY TESTING
+```{r testing button_estimate}
+# Q-Q plot 
+norm <- merged_df %>% ggplot(aes(x = button_accuracy)) +
+  geom_histogram(aes(y = after_stat(density)), 
+                 binwidth = 0.5, 
+                 color = "black", 
+                 fill = "white") +
+  stat_function(fun = dnorm, 
+                args = list(mean = mean(merged_df$button_accuracy, na.rm = TRUE),
+                sd = sd(merged_df$button_accuracy, na.rm = TRUE)), 
+                colour = "darkgreen", linewidth = 1) +
+  theme_classic() + 
+  xlim(range(merged_df$button_accuracy)) +
+  ggtitle("button_accuracy Normal Distribution")
+
+
+ button_accuracy_qq <- ggplot(data = merged_df, aes(sample = button_accuracy)) +
+    stat_qq()+
+    stat_qq_line()+
+    labs(x = "Theoretical quantiles", y = "Sample quantiles")+
+   theme_minimal()
+ 
+ grid.arrange(norm, button_accuracy_qq, ncol=2)
+
+shapiro.test(merged_df$button_accuracy) # also <.05
+
+
+button_accuracy <- merged_df %>% 
+  select(button_accuracy)
+normality <-  round(stat.desc(button_accuracy, basic=FALSE, norm = TRUE), digits = 2)
+
+```
+
+```{r testing written estimate}
+# Q-Q plot
+norm <- merged_df %>% ggplot(aes(x = written_accuracy)) +
+  geom_histogram(aes(y = after_stat(density)), 
+                 binwidth = 1, 
+                 color = "black", 
+                 fill = "white") +
+  stat_function(fun = dnorm, 
+                args = list(mean = mean(merged_df$written_accuracy, na.rm = TRUE),
+                sd = sd(merged_df$written_accuracy, na.rm = TRUE)), 
+                colour = "darkgreen", linewidth = 1) +
+  theme_classic() + 
+  xlim(range(merged_df$written_accuracy)) +
+  ggtitle("written_accuracy Normal Distribution")
+
+
+ written_accuracy_qq <- ggplot(data = merged_df, aes(sample = written_accuracy)) +
+    stat_qq()+
+    stat_qq_line()+
+    labs(x = "Theoretical quantiles", y = "Sample quantiles")+
+   theme_minimal()
+ 
+ grid.arrange(norm, written_accuracy_qq, ncol=2)
+
+shapiro.test(merged_df$written_accuracy) # also <.05
+```
+
+> Can't reject normality.
+
+## Homogeneity of Variances
+```{r}
+# Levene's Test for 'button_estimate' across different 'Condition'
+leveneTest(button_estimate ~ Condition, data = merged_df)
+# you don't need to meet the homogeneity assumption if the groups you're comparing have roughly equal sample sizes
+# >.05, the variances are not significantly different from each other (i.e., the homogeneity assumption of the variance is met)
+```
+## Transforming
+```{r}
+rt_trans <- df %>%  select(c(ID, RT)) %>%  mutate(log = log(RT), sqrt = sqrt(RT), reciprocal = 1/RT)
+shapiro.test(rt_trans$log)
+shapiro.test(rt_trans$sqrt)
+shapiro.test(rt_trans$reciprocal)
+```
+
+## Correlation
+```{r}
+merged_df$action_numeric <- as.factor(merged_df$action_numeric)
+merged_df %>% 
+  select(c(ID, Age, Gender, Condition, Phase, button_accuracy, productivity, stress, action_numeric)) %>% 
+  plot()
+
+```
+
+```{r correlation}
+
+ggplot(merged_df,aes(x = productivity , y = experimental_effect))+
+  geom_point()+
+  geom_smooth(method=lm)+
+  theme_minimal()+
+      labs(x = "Productivity", y = "Time Perception")
+# the more productive the more accurate?
+ ggplot(merged_df,aes(x = stress , y = experimental_effect))+
+  geom_point()+
+  geom_smooth(method=lm)+
+  theme_minimal()+
+      labs(x = "Stress", y = "Time Perception")
+ 
+```
+
+
+```{r correlation}
+# Estimation effect ~ 
+cor.test(df_bad$log_RT, df_bad$Trigger_lvl, method = 'pearson') # significant positive
+cor.test(df_bad$RT, df_bad$Trigger_lvl, method = 'kendall') # significant
+cor.test(df_bad$RT, df_bad$Trigger_lvl, method = 'spearman') # significant
+
+
+
+#######
+ WRS2::yuen(experimental_effect ~ Condition, 
+                          data = merged_df, trim = 0.2) # <.05 sig. relationship
+ WRS2::yuen(productivity ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
+```
+
+
+## Non-parametric
+```{r}
+# Can condition predict the difference between before and after Lego task(the manipulation)?
+kruskal_test <- kruskal.test(experimental_effect ~ Condition, data = merged_df)
+# if im less accurate in effect i was more affected... so the more accurate after lego task the less affected 
+```
+
