@@ -114,8 +114,6 @@ merged_df$lego_exp[is.na(merged_df$lego_exp)] <- 0
 # delete characters from perceived_time
 merged_df$perceived_time <- gsub("[^0-9]", "", merged_df$perceived_time)
 
-
-
 merged_df$Phase <- as.factor(merged_df$Phase)
 merged_df$Time <- as.factor(merged_df$Time)
 merged_df$ID <- as.factor(merged_df$ID)
@@ -162,7 +160,7 @@ merged_df <- merged_df %>%
   mutate(productivity = case_when(
     Condition == 2 ~ models_done / 300,
     Condition == 1 ~ models_done / 360,
-    Condition == 3 ~ models_done / 120
+    Condition == 3 ~ models_done / 240
   ))
 
 # make an estimation_effect that shows the difference in time perceptions where negative values mean underestimation (for example in fast condition) and positive mean overestimation (for example in slow condition)
@@ -327,7 +325,6 @@ merged_df %>%
 
 > In written estimates: slow condition overestimated more and fast condtion overestimated less. Big effects seen on slow and control, not fast.
 
-
 ```{r save csv merged}
 write.csv(merged_df, "merged_data.csv", row.names = FALSE)
 ```
@@ -401,11 +398,9 @@ ggplot(aes(x = written_accuracy)) +
 
 ```
 
-
 ### Participants that were presented with a rigged timer will estimate tone durations less accurately than before the lego task.
 
-> Yes. In button estimate slow and fast were -0.66 off on average while control was only -0.42 off. 
-> No. In written estimate slow and fast was 2.01 and 0.25 and control was 0.83. Meaning in this case the fast condition was more accurate.
+> Yes. In button estimate slow and fast were -0.66 off on average while control was only -0.42 off. No. In written estimate slow and fast was 2.01 and 0.25 and control was 0.83. Meaning in this case the fast condition was more accurate.
 
 ```{r before vs after task by condition}
 # plot the difference between button and written estimation perception in baseline AND effect trials
@@ -471,16 +466,18 @@ merged_df %>%
 
 > Focus reported was highest in the slow condition, second highest in the fast condition.
 
-### While being exposed to a sped/slowed down up timer when they’re performing a lego recreation task, participants will report being less/more stressed during the task.
+### While being exposed to a sped/slowed down up timer when they're performing a lego recreation task, participants will report being less/more stressed during the task.
+
 ```{r stress by condition}
 merged_df %>% 
   group_by(Condition) %>% 
   summarise(mean(stress))
 ```
-> Oddly, the control group was the most stressed, closely followed by the fast group.
-> The slow group was the least stressed, probably after noticing their timer.
+
+> Oddly, the control group was the most stressed, closely followed by the fast group. The slow group was the least stressed, probably after noticing their timer.
 
 ### How many noticed the rigged timer?
+
 ```{r}
 merged_df$perceived_time <- as.factor(merged_df$perceived_time)
 incorrect_estimates <- merged_df %>%
@@ -496,18 +493,19 @@ incorrect_estimates <- merged_df %>%
 
 incorrect_estimates
 ```
+
 > Out of 20 people in the rigged conditions, staggering 18 of them noticed the timer was rigged.
 
 ### How many paid attention to the timer?
+
 ```{r}
 merged_df %>% 
   filter(Time==1) %>% 
   group_by(Condition) %>% 
   summarise(mean(attention_timer)) 
 ```
-> The slow condition was supposedly double-checking why the timer wasn't running out as they expected.
-> Fast condition didn't have time to notice / they didn't expect the timer to run out.
-> Overall not many reported being too aware of the timer which can explain variability in productivity and button_accuracy after the task.
+
+> The slow condition was supposedly double-checking why the timer wasn't running out as they expected. Fast condition didn't have time to notice / they didn't expect the timer to run out. Overall not many reported being too aware of the timer which can explain variability in productivity and button_accuracy after the task.
 
 ### Which action brings more accurate estimates?
 
@@ -657,10 +655,8 @@ cor.test(merged_df$experimental_effect, merged_df$stress, method = 'spearman') #
 cor.test(merged_df$experimental_effect, merged_df$focus, method = 'kendall') # significant + negative
 cor.test(merged_df$experimental_effect, merged_df$focus, method = 'spearman') # significant + negative
 ```
-> We found a significant and positive relationship between experimental_effect (i.e. how different the estimates were before vs after the task) and stress during the lego task.
->> So the more stressed you were during the task the more inaccurate your estimates after.
-> We found a significant and negative relationship between experimental_effect (i.e. how different the estimates were before vs after the task) and focus during the lego task.
->> So the more focused you were the less inaccurate your estimates after
+
+> We found a significant and positive relationship between experimental_effect (i.e. how different the estimates were before vs after the task) and stress during the lego task. \> So the more stressed you were during the task the more inaccurate your estimates after. We found a significant and negative relationship between experimental_effect (i.e. how different the estimates were before vs after the task) and focus during the lego task. \> So the more focused you were the less inaccurate your estimates after
 
 ```{r correlation for condition}
 WRS2::yuen(experimental_effect ~ Condition, 
@@ -670,10 +666,11 @@ WRS2::yuen(button_accuracy ~ Condition, data = merged_df, trim = 0.2) # >.05 not
 WRS2::yuen(stress ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
 WRS2::yuen(focus ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig.
 ```
+
 > The Yuen test uncovered a significant difference between conditions in experimental_effect and productivity.
 
-
 ## Mixed-effects model
+
 ```{r}
 model1 <- lme4::glmer(experimental_effect ~ Condition + Age + Gender + stress + focus + (1|ID), 
                data = merged_df, 
@@ -690,7 +687,9 @@ model2 <- lme4::glmer(experimental_effect ~ Condition*stress + Age + Gender  + f
 MuMIn::r.squaredGLMM(model2) # R2 is 0.88
 
 ```
+
 ### Residuals
+
 ```{r}
 plot(fitted(model2), residuals(model2), xlab = "Fitted Values", ylab = "Residuals")
 abline(h = 0, col = "red")
@@ -710,12 +709,12 @@ plot(model2, which = 5)
 shapiro.test(residuals(model2))
 ```
 
+# Bayesian modeling using baseline as priors
 
-# Bayesian modeling using baseline as priors 
-
-> SPOILERS: it didnt work 
+> SPOILERS: it didnt work
 
 ### Define priors
+
 ```{r}
 baseline_data <- merged_df %>% filter(Phase == "baseline")
 
@@ -736,15 +735,16 @@ fit_model <- brm(model_formula,
 ```
 
 ### Examine results
+
 ```{r}
 # Summary of the model
 summary(fit_model)
 # Diagnostics
 plot(fit_model)
 ```
+
 ### Posterior Predicts Checks
+
 ```{r}
 pp_check(model_fit)
 ```
-
-
