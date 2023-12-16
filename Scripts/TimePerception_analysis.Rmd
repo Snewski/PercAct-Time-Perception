@@ -22,7 +22,11 @@ pacman::p_load(
   kableExtra,
   pastecs,
   car,
-  WRS2
+  WRS2,
+  brms,
+  rstanarm,
+  patchwork,
+  modelsummary
 )
 
 ```
@@ -101,7 +105,7 @@ merged_df <- merged_df %>%
   )
 ```
 
-# Some more cleaning
+### Some more cleaning
 
 ```{r}
 # set NAs in lego experience to 0
@@ -150,7 +154,7 @@ merged_df$button_estimate[row_to_change] <- button1_mean
 
 ```
 
-## Calculate other needed metrics
+### Calculate other needed metrics like PRODUCTIVITY and BUTTON ACCURACY
 
 ```{r}
 # make the "productivity" variable which is models_done/300seconds for Condition = 2
@@ -163,52 +167,16 @@ merged_df <- merged_df %>%
 
 # make an estimation_effect that shows the difference in time perceptions where negative values mean underestimation (for example in fast condition) and positive mean overestimation (for example in slow condition)
 merged_df <- merged_df %>%
-  mutate(button_accuracy = abs(button_estimate - beep_time))
+  mutate(button_accuracy = button_estimate - beep_time)
 merged_df <- merged_df %>%
-  mutate(written_accuracy = abs(written_estimate - beep_time))
-
+  mutate(written_accuracy = written_estimate - beep_time)
+merged_df$button_accuracy <- as.numeric(merged_df$button_accuracy)
 
 # beep time higher than estimate => negative value, thus underestimation
 # I swear I have to write this down over and over cuz I keep forgetting
 ```
 
-
-
-# Exploratory phase
-```{r}
-merged_df %>% 
-  filter(Condition ==1) %>% 
-  group_by(Gender) %>% 
-  distinct(ID) %>% 
-  count()
-
-merged_df %>% 
-  filter(Condition ==2) %>% 
-  group_by(Gender) %>% 
-  distinct(ID) %>% 
-  count()
-
-merged_df %>% 
-  filter(Condition ==3) %>% 
-  group_by(Gender) %>% 
-  distinct(ID) %>% 
-  count()
-
-merged_df %>% 
-  filter(Condition==2) %>% 
-  group_by(Gender) %>% 
-  summarise(mean(productivity))
-
-merged_df %>% 
-  group_by(Condition) %>% 
-  summarise(mean(productivity))
-```
-> I need to note that the Fast condition is mostly composed by Female participants.
-> In the control condition, Male participants were slightly more productive.
-> Productivity in the Fast condition jumped by ~0.049 from the control. While it only increased by ~0.004 in the slow condition where participants had more time.
-
-
-## Handling the action variable
+### Handling the action variable
 
 ```{r}
 # 1. Split and sort options
@@ -244,81 +212,129 @@ kable_table <- kable(legend_table, format = "html", caption = "Legend of Actions
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 kable_table
 ```
-```{r}
-# create separate dfs for baseline and effect estimations
-baseline_df <- subset(merged_df, Phase == "baseline")
-effect_df <- subset(merged_df, Phase == "effect")
-```
 
-###After being exposed to a sped/slowed down up timer while performing a lego recreation task, participants will estimate tone durations as shorter/longer.
+## Exploratory phase
 
-```{r}
-# average difference between baseline and effect estimates 
+```{r exploratory}
+# number of participants of each gender by condition
+cond1 <- merged_df %>% 
+  filter(Condition ==1) %>% 
+  group_by(Gender) %>% 
+  distinct(ID) %>% 
+  count() %>% 
+  mutate(Condition = 1)
 
-# Calculate mean_baseline_perception
-baseline_df <- baseline_df %>% 
-  group_by(ID) %>% 
-  mutate(mean_baseline_accuracy = mean(button_accuracy, na.rm = TRUE))
+cond2<-merged_df %>% 
+  filter(Condition ==2) %>% 
+  group_by(Gender) %>% 
+  distinct(ID) %>% 
+  count() %>% 
+  mutate(Condition = 2)
 
-# Calculate mean_effect_perception
-effect_df<- effect_df %>% 
-  group_by(ID) %>% 
-  mutate(mean_effect_accuracy = mean(button_accuracy, na.rm = TRUE))
+cond3<-merged_df %>% 
+  filter(Condition ==3) %>% 
+  group_by(Gender) %>% 
+  distinct(ID) %>% 
+  count() %>% 
+  mutate(Condition = 3)
 
-# Join the two dataframes
-effect_vs_baseline <- left_join(baseline_df, effect_df, by = "ID")
+bind_rows(cond1, cond2, cond3)
 
-effect_vs_baseline <- effect_vs_baseline %>% 
-  mutate(experimental_effect = abs( mean_baseline_accuracy - mean_effect_accuracy ))
-# if im less accurate in effect i was more affected... so the more accurate after lego task the less affected 
-
-merged_df <- left_join(merged_df, effect_vs_baseline, by = "ID")
-# now we have average accuracy for both baseline and effect for each ID, meaning we have two averages for each ID
-# now we need the difference of the averages across conditions
-# slow condition
-merged_df %>% 
-  filter(Condition==1) %>% 
-  summarise(avg_baseline_acc= mean(mean_baseline_accuracy),
-            avg_effect_acc = mean(mean_effect_accuracy),
-            difference =  abs(avg_effect_acc - avg_baseline_acc))
-# fast condition
-merged_df %>% 
-  filter(Condition==3) %>% 
-  summarise(avg_baseline_acc = mean(mean_baseline_accuracy),
-            avg_effect_acc = mean(mean_effect_accuracy),
-            difference =  abs(avg_effect_acc - avg_baseline_acc))
-
-# control condition
+# mean productivity by gender in control
 merged_df %>% 
   filter(Condition==2) %>% 
-  summarise(avg_baseline_acc = mean(mean_baseline_accuracy),
-            avg_effect_acc = mean(mean_effect_accuracy),
-            difference =  abs(avg_effect_acc- avg_baseline_acc))
+  group_by(Gender) %>% 
+  summarise(mean(productivity))
+# mean procudtivity by condition
+merged_df %>% 
+  group_by(Condition) %>% 
+  summarise(mean(productivity))
+```
 
+> I need to note that the Fast condition is mostly composed by Female participants. In the control condition, Male participants were slightly more productive. Productivity in the Fast condition jumped by \~0.049 from the control. While it only increased by \~0.004 in the slow condition where participants had more time.
+
+### After being exposed to a sped/slowed down up timer while performing a lego recreation task, participants will estimate tone durations as shorter/longer.
+
+```{r button estimation}
+# average difference between baseline and effect estimates 
+
+# Calculate mean baseline accuracy for each ID
+baseline_df <- merged_df %>% 
+  filter(Phase == "baseline") %>% 
+  group_by(ID) %>% 
+  summarise(mean_baseline_accuracy = mean(button_accuracy, na.rm = TRUE))
+
+# Calculate mean effect accuracy for each ID
+effect_df <- merged_df %>% 
+  filter(Phase == "effect") %>% 
+  group_by(ID) %>% 
+  summarise(mean_effect_accuracy = mean(button_accuracy, na.rm = TRUE))
+
+# Join and calculate the experimental effect
+effect_vs_baseline <- baseline_df %>%
+  left_join(effect_df, by = "ID") %>%
+  mutate(experimental_effect = abs(mean_baseline_accuracy - mean_effect_accuracy))
+
+# Join this information back to the original merged_df
+# Ensure only necessary columns are included to avoid duplications
+merged_df <- merged_df %>%
+  left_join(select(effect_vs_baseline, ID, mean_baseline_accuracy, mean_effect_accuracy, experimental_effect), by = "ID")
+
+# now we have average accuracy for both baseline and effect for each ID, meaning we have two averages for each ID
+# now we need the average difference across conditions
+
+merged_df %>% 
+  group_by(Condition)%>% 
+  summarise(mean(mean_baseline_accuracy), mean(mean_effect_accuracy), mean(experimental_effect)) 
 # lower value means more they underestimated
 
 ```
-> Slow condition underestimated less after the lego task (meaning they leaned more towards overestimating, thus perceiving the tone to last longer after being exposed to a slowed down timer). We could say that time was passing slower for these participants.
->> -0.61 vs. -0.53 is a pretty big effect.
-> Fast condition followed the same trend but the effect was smaller (-0.53 vs. -0.51). Meaning they still tended to overestimating but but not as much as the slow condition. Could this mean that time "flied" for them?
 
-### Participants that were presented with a rigged timer will estimate tone durations less accurately than before the lego task.
-> Slow condition was more accurate by 0.08 compared to before Lego Task.
-> Control condition was more accurate by 0.06
-> Fast condition was more accurate by 0.02
-> So the hypothesis is only true for the faster condition. (Everyone got close to 0, or estimating correctly, but the fast condition did not get much better)
+> Slow condition underestimated after the lego task (perceived the tune to last shorter), but not by a lot. Fast condition underestimated after the lego task (perceived the tune to last shorter), by a lot.
+
+```{r written estimation}
+# Calculate mean baseline accuracy for each ID
+baseline_df <- merged_df %>% 
+  filter(Phase == "baseline") %>% 
+  group_by(ID) %>% 
+  summarise(mean_baseline_accuracy = mean(written_accuracy, na.rm = TRUE))
+
+# Calculate mean effect accuracy for each ID
+effect_df <- merged_df %>% 
+  filter(Phase == "effect") %>% 
+  group_by(ID) %>% 
+  summarise(mean_effect_accuracy = mean(written_accuracy, na.rm = TRUE))
+
+# Join and calculate the experimental effect
+effect_vs_baseline <- baseline_df %>%
+  left_join(effect_df, by = "ID") %>%
+  mutate(experimental_effect = abs(mean_baseline_accuracy - mean_effect_accuracy))
+
+# Join this information back to the original merged_df
+# Ensure only necessary columns are included to avoid duplications
+merged_df <- merged_df %>%
+  left_join(select(effect_vs_baseline, ID, mean_baseline_accuracy, mean_effect_accuracy, experimental_effect), by = "ID")
+
+# now we have average accuracy for both baseline and effect for each ID, meaning we have two averages for each ID
+# now we need the average difference across conditions
+
+merged_df %>% 
+  group_by(Condition)%>% 
+  summarise(mean(mean_baseline_accuracy), mean(mean_effect_accuracy), mean(experimental_effect)) 
+# lower value means more they underestimated
+
+```
+
+> In written estimates: slow condition overestimated more and fast condtion overestimated less. Big effects seen on slow and control, not fast.
 
 
-
-> Oposite effect in written estimation in slower condition. (They overestimated less)
-> Oposite effect in written estimation in faster condition. (They overestimated less, but not as big difference)
-
-```{r}
+```{r save csv merged}
 write.csv(merged_df, "merged_data.csv", row.names = FALSE)
 ```
 
-### Plots
-```{r}
+## Plots
+
+```{r histograms button accuracy}
 # plotting the distribution of time perceptions through button estimates
 merged_df %>% 
   filter(Phase == "baseline") %>% 
@@ -351,7 +367,7 @@ ggplot(aes(x = button_accuracy)) +
 
 ```
 
-```{r}
+```{r histograms written accuracy}
 
 # plotting the distribution of time perceptions through written estimates
 merged_df %>% 
@@ -386,7 +402,12 @@ ggplot(aes(x = written_accuracy)) +
 ```
 
 
-```{r}
+### Participants that were presented with a rigged timer will estimate tone durations less accurately than before the lego task.
+
+> Yes. In button estimate slow and fast were -0.66 off on average while control was only -0.42 off. 
+> No. In written estimate slow and fast was 2.01 and 0.25 and control was 0.83. Meaning in this case the fast condition was more accurate.
+
+```{r before vs after task by condition}
 # plot the difference between button and written estimation perception in baseline AND effect trials
 merged_df %>% 
   filter(Condition == 1) %>% 
@@ -410,10 +431,9 @@ ggplot(aes(x = factor(Phase), y = button_accuracy, fill = Phase)) +
   labs(title = "Button Estimate before and after in Normal Condition", x = "Phase", y = "Button Estimate")
 ```
 
-> It seems like in all conditions, after completing the Lego Task participants tend to overestimate the tune duration. This can be due to boredom caused by the redundancy of the experiment.
+> It seems like in all conditions, after completing the Lego Task participants tend to underestimate the tune duration. This could be because they forget to count towards the end or start counting too late into the tone.
 
-
-```{r}
+```{r estimate accuracy after task by condition}
 merged_df %>% 
   filter(Phase=="effect") %>% 
 ggplot( aes(x = factor(Condition), y = button_accuracy, fill = Condition)) +
@@ -423,26 +443,75 @@ ggplot( aes(x = factor(Condition), y = button_accuracy, fill = Condition)) +
 
 ```
 
-```{r}
+### While being exposed to a sped/slowed down up timer when they're performing a lego recreation task, participants will be more/less productive (the ratio of completed configurations and actual time will be higher than the control condition)
+
+```{r productivity by condition}
 merged_df %>% 
 ggplot( aes(x = factor(Condition), y = productivity, fill = Condition)) +
   geom_boxplot() +
   theme_minimal() +
   labs(title = "Productivity by Condition", x = "Condition", y = "Productivity")
-```
-> Big diffference in productivity in the Fast condition. Seems like they did more in the time given.
-> Slow might be better than condition just because they objectively had more time.
 
-### While being exposed to a sped up/slowed down timer when they’re performing a lego recreation task, participants will report feeling more/less focused on the task.
-```{r}
+ggplot(merged_df, aes(x = productivity, y = stress)) +
+  geom_point(aes(color = Condition), alpha = 0.7, position = position_jitter(width = 0.1, height = 0.1)) +
+  theme_minimal() +
+  labs(title = "Productivity vs. Stress", x = "Productivity", y = "Stress")
+
+```
+
+> Big diffference in productivity in the Fast condition. Seems like they did proportionately better. Slow might be better than condition just because they objectively had more time.
+
+### While being exposed to a sped up/slowed down timer when they're performing a lego recreation task, participants will report feeling more/less focused on the task.
+
+```{r focus by condition}
 merged_df %>% 
   group_by(Condition) %>% 
   summarise(mean(focus))
 ```
-> Focus reported was highest in the slow condition, second highest in the fast condition. 
+
+> Focus reported was highest in the slow condition, second highest in the fast condition.
+
+### While being exposed to a sped/slowed down up timer when they’re performing a lego recreation task, participants will report being less/more stressed during the task.
+```{r stress by condition}
+merged_df %>% 
+  group_by(Condition) %>% 
+  summarise(mean(stress))
+```
+> Oddly, the control group was the most stressed, closely followed by the fast group.
+> The slow group was the least stressed, probably after noticing their timer.
+
+### How many noticed the rigged timer?
+```{r}
+merged_df$perceived_time <- as.factor(merged_df$perceived_time)
+incorrect_estimates <- merged_df %>%
+  filter(Time==1) %>% 
+  mutate(Incorrect_Estimation = case_when(
+    Condition == 1 & perceived_time != 6 ~ TRUE,
+    Condition == 2 & perceived_time != 5 ~ TRUE,
+    Condition == 3 & perceived_time != 4 ~ TRUE,
+    TRUE ~ FALSE
+  )) %>%
+  group_by(Condition) %>%
+  summarise(Count_Incorrect = sum(Incorrect_Estimation, na.rm = TRUE))
+
+incorrect_estimates
+```
+> Out of 20 people in the rigged conditions, staggering 18 of them noticed the timer was rigged.
+
+### How many paid attention to the timer?
+```{r}
+merged_df %>% 
+  filter(Time==1) %>% 
+  group_by(Condition) %>% 
+  summarise(mean(attention_timer)) 
+```
+> The slow condition was supposedly double-checking why the timer wasn't running out as they expected.
+> Fast condition didn't have time to notice / they didn't expect the timer to run out.
+> Overall not many reported being too aware of the timer which can explain variability in productivity and button_accuracy after the task.
 
 ### Which action brings more accurate estimates?
-```{r}
+
+```{r estimate accuracy by action}
 merged_df$action_numeric <- as.factor(merged_df$action_numeric )
 action_means<- merged_df %>% 
   group_by(action_numeric) %>% 
@@ -455,12 +524,11 @@ ggplot(action_means, aes(x = action_numeric, y = mean_estimation)) +
   labs(x = "Action Numeric", y = "Mean Estimation Effect Button", 
        title = "Mean Estimation Effect Button by Action Number")
 ```
-> Participants (n=2) using 5 (reimagining the sound in your head) tend to underestimate and be very inaccurate
-> Participant using 10 (tapping along) overestimated the duration and was fairly innacurate.
-> 6 and 2 (using mixed methods) is most accurate but both only used by one participant 
-> The most used method, 1 or counting in your mind, was moderately accurate
+
+> Participants (n=2) using 5 (reimagining the sound in your head) tend to underestimate and be very inaccurate Participant using 10 (tapping along) overestimated the duration and was fairly innacurate. 6 and 2 (using mixed methods) is most accurate but both only used by one participant The most used method, 1 or counting in your mind, was moderately accurate
 
 ### Comparing genders
+
 ```{r}
 merged_df %>% 
 ggplot(aes(x = factor(Condition), y = productivity, fill = Gender)) +
@@ -470,16 +538,8 @@ ggplot(aes(x = factor(Condition), y = productivity, fill = Gender)) +
   facet_wrap(merged_df$Gender)
 ```
 
-### Scatterplots
-```{r}
-ggplot(merged_df, aes(x = productivity, y = stress)) +
-  geom_point(aes(color = Condition), alpha = 0.7, position = position_jitter(width = 0.1, height = 0.1)) +
-  theme_minimal() +
-  labs(title = "Productivity vs. Stress", x = "Productivity", y = "Stress")
-
-```
-
 # NORMALITY TESTING
+
 ```{r testing button_estimate}
 # Q-Q plot 
 norm <- merged_df %>% ggplot(aes(x = button_accuracy)) +
@@ -538,36 +598,42 @@ norm <- merged_df %>% ggplot(aes(x = written_accuracy)) +
  grid.arrange(norm, written_accuracy_qq, ncol=2)
 
 shapiro.test(merged_df$written_accuracy) # also <.05
+
+shapiro.test(merged_df$experimental_effect) # >.05 can be used
+
 ```
 
 > Can't reject normality.
 
 ## Homogeneity of Variances
+
 ```{r}
 # Levene's Test for 'button_estimate' across different 'Condition'
 leveneTest(button_estimate ~ Condition, data = merged_df)
 # you don't need to meet the homogeneity assumption if the groups you're comparing have roughly equal sample sizes
 # >.05, the variances are not significantly different from each other (i.e., the homogeneity assumption of the variance is met)
+fligner.test(button_accuracy ~ Condition, merged_df) # equal variances
 ```
+
 ## Transforming
+
 ```{r}
-rt_trans <- df %>%  select(c(ID, RT)) %>%  mutate(log = log(RT), sqrt = sqrt(RT), reciprocal = 1/RT)
-shapiro.test(rt_trans$log)
-shapiro.test(rt_trans$sqrt)
-shapiro.test(rt_trans$reciprocal)
+accuracy_trans <- merged_df %>%  select(c(ID, button_accuracy)) %>%  mutate(log = log(button_accuracy), sqrt = sqrt(button_accuracy), reciprocal = 1/button_accuracy)
+shapiro.test(accuracy_trans$log)
+shapiro.test(accuracy_trans$sqrt) # >.05 could be considered normal
+shapiro.test(accuracy_trans$reciprocal)
 ```
 
 ## Correlation
+
 ```{r}
 merged_df$action_numeric <- as.factor(merged_df$action_numeric)
 merged_df %>% 
-  select(c(ID, Age, Gender, Condition, Phase, button_accuracy, productivity, stress, action_numeric)) %>% 
+  select(c(ID, Age, Gender, Condition, Phase,experimental_effect, productivity, stress, action_numeric)) %>% 
   plot()
-
 ```
 
 ```{r correlation}
-
 ggplot(merged_df,aes(x = productivity , y = experimental_effect))+
   geom_point()+
   geom_smooth(method=lm)+
@@ -582,26 +648,103 @@ ggplot(merged_df,aes(x = productivity , y = experimental_effect))+
  
 ```
 
-
 ```{r correlation}
-# Estimation effect ~ 
-cor.test(df_bad$log_RT, df_bad$Trigger_lvl, method = 'pearson') # significant positive
-cor.test(df_bad$RT, df_bad$Trigger_lvl, method = 'kendall') # significant
-cor.test(df_bad$RT, df_bad$Trigger_lvl, method = 'spearman') # significant
+# experimental effect ~ stress
+cor.test(merged_df$experimental_effect, merged_df$stress, method = 'kendall') # significant + positive
+cor.test(merged_df$experimental_effect, merged_df$stress, method = 'spearman') # significant + positive
 
+# experimental effect ~ focus
+cor.test(merged_df$experimental_effect, merged_df$focus, method = 'kendall') # significant + negative
+cor.test(merged_df$experimental_effect, merged_df$focus, method = 'spearman') # significant + negative
+```
+> We found a significant and positive relationship between experimental_effect (i.e. how different the estimates were before vs after the task) and stress during the lego task.
+>> So the more stressed you were during the task the more inaccurate your estimates after.
+> We found a significant and negative relationship between experimental_effect (i.e. how different the estimates were before vs after the task) and focus during the lego task.
+>> So the more focused you were the less inaccurate your estimates after
 
-
-#######
- WRS2::yuen(experimental_effect ~ Condition, 
+```{r correlation for condition}
+WRS2::yuen(experimental_effect ~ Condition, 
                           data = merged_df, trim = 0.2) # <.05 sig. relationship
- WRS2::yuen(productivity ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
+WRS2::yuen(productivity ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
+WRS2::yuen(button_accuracy ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig.
+WRS2::yuen(stress ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
+WRS2::yuen(focus ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig.
 ```
+> The Yuen test uncovered a significant difference between conditions in experimental_effect and productivity.
 
 
-## Non-parametric
+## Mixed-effects model
 ```{r}
-# Can condition predict the difference between before and after Lego task(the manipulation)?
-kruskal_test <- kruskal.test(experimental_effect ~ Condition, data = merged_df)
-# if im less accurate in effect i was more affected... so the more accurate after lego task the less affected 
+model1 <- lme4::glmer(experimental_effect ~ Condition + Age + Gender + stress + focus + (1|ID), 
+               data = merged_df, 
+               family = gaussian)
+plot(model1)
+summary(model1)
+
+MuMIn::r.squaredGLMM(model1) # R2 is 0.83
+
+
+model2 <- lme4::glmer(experimental_effect ~ Condition*stress + Age + Gender  + focus + (1|ID), 
+               data = merged_df, 
+               family = gaussian)
+MuMIn::r.squaredGLMM(model2) # R2 is 0.88
+
 ```
+### Residuals
+```{r}
+plot(fitted(model2), residuals(model2), xlab = "Fitted Values", ylab = "Residuals")
+abline(h = 0, col = "red")
+
+qqnorm(residuals(model2))
+qqline(residuals(model2))
+
+hist(residuals(model2), breaks = "Sturges", main = "Histogram of Residuals", xlab = "Residuals")
+# Or for a density plot
+plot(density(residuals(model1)), main = "Density Plot of Residuals", xlab = "Residuals")
+
+plot(model2, which = 5)
+
+```
+
+```{r}
+shapiro.test(residuals(model2))
+```
+
+
+# Bayesian modeling using baseline as priors 
+
+> SPOILERS: it didnt work 
+
+### Define priors
+```{r}
+baseline_data <- merged_df %>% filter(Phase == "baseline")
+
+model_formula <- bf(button_accuracy ~ Condition + Age + Gender + stress + focus + (1|ID))
+
+priors <- prior(normal(mean(baseline_data$button_accuracy, na.rm = TRUE), 
+              sd(baseline_data$button_accuracy, na.rm = TRUE)), class = "b")
+
+fit_model <- brm(model_formula, 
+                 data = merged_df %>% filter(Phase == "effect"),
+                 prior = priors,
+                 family = gaussian(), 
+                 data2 = list(N = nrow(data)),
+                 chains = 4, 
+                 iter = 2000,
+                 control = list(adapt_delta = 0.95))
+
+```
+
+### Examine results
+```{r}
+# Summary of the model
+summary(fit_model)
+# Diagnostics
+plot(fit_model)
+```
+### Posterior Predicts Checks
+```{r}
+pp_check(model_fit)
+```
+
 
