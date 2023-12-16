@@ -1,8 +1,9 @@
 ---
 title: "TimePerception_analysis"
-author: "Barbora Ferusová"
-date: "`r Sys.Date()`"
-output: pdf_document
+output:
+  pdf_document: default
+geometry: margin=1in
+knit: (function(input, encoding) { rmarkdown::render(input, encoding = encoding, output_dir = "../documents") })
 ---
 
 > Conditions: 1 is slow, 2 is normal, and 3 is fast Real timer durations: Slow:6 Normal:5 Fast:4
@@ -67,14 +68,14 @@ cleaned_df$Time <- as.numeric(cleaned_df$Time)
 cleaned_df <- cleaned_df %>%
   mutate(Phase = ifelse(Time >= 1 & Time <= 6, "baseline", "effect"))
 
-write.csv(cleaned_df, "cleaned_data.csv", row.names = FALSE)
+write.csv(cleaned_df, "Data/cleaned_data.csv", row.names = FALSE)
 
 ```
 
 ### Get survey data
 
 ```{r}
-survey_df <- read_csv("Survey_responses.csv")
+survey_df <- read_csv("Data/Survey_responses.csv")
 survey_df <- survey_df[-1]
 ```
 
@@ -253,7 +254,7 @@ merged_df %>%
 
 ### After being exposed to a sped/slowed down up timer while performing a lego recreation task, participants will estimate tone durations as shorter/longer.
 
-```{r button estimation}
+```{r button estimation }
 # average difference between baseline and effect estimates 
 
 # Calculate mean baseline accuracy for each ID
@@ -326,7 +327,8 @@ merged_df %>%
 > In written estimates: slow condition overestimated more and fast condtion overestimated less. Big effects seen on slow and control, not fast.
 
 ```{r save csv merged}
-write.csv(merged_df, "merged_data.csv", row.names = FALSE)
+
+write.csv(merged_df, "Data/merged_data.csv", row.names = FALSE)
 ```
 
 ## Plots
@@ -454,7 +456,7 @@ ggplot(merged_df, aes(x = productivity, y = stress)) +
 
 ```
 
-> Big diffference in productivity in the Fast condition. Seems like they did proportionately better. Slow might be better than condition just because they objectively had more time.
+> Rigged timers made participants more productive. Slowed condition because they had more time and Fast condition because they were pushed to get more done.
 
 ### While being exposed to a sped up/slowed down timer when they're performing a lego recreation task, participants will report feeling more/less focused on the task.
 
@@ -483,9 +485,7 @@ merged_df$perceived_time <- as.factor(merged_df$perceived_time)
 incorrect_estimates <- merged_df %>%
   filter(Time==1) %>% 
   mutate(Incorrect_Estimation = case_when(
-    Condition == 1 & perceived_time != 6 ~ TRUE,
-    Condition == 2 & perceived_time != 5 ~ TRUE,
-    Condition == 3 & perceived_time != 4 ~ TRUE,
+     perceived_time != 5 ~ TRUE,
     TRUE ~ FALSE
   )) %>%
   group_by(Condition) %>%
@@ -494,7 +494,8 @@ incorrect_estimates <- merged_df %>%
 incorrect_estimates
 ```
 
-> Out of 20 people in the rigged conditions, staggering 18 of them noticed the timer was rigged.
+> Out of 20 people in the rigged conditions, only 8 noticed the timer being rigged.
+> It would be interedsting to look at the people in control that assumed the timer was rigged. It might be relevant in the t-test comparing the groups.
 
 ### How many paid attention to the timer?
 
@@ -631,20 +632,6 @@ merged_df %>%
   plot()
 ```
 
-```{r correlation}
-ggplot(merged_df,aes(x = productivity , y = experimental_effect))+
-  geom_point()+
-  geom_smooth(method=lm)+
-  theme_minimal()+
-      labs(x = "Productivity", y = "Time Perception")
-# the more productive the more accurate?
- ggplot(merged_df,aes(x = stress , y = experimental_effect))+
-  geom_point()+
-  geom_smooth(method=lm)+
-  theme_minimal()+
-      labs(x = "Stress", y = "Time Perception")
- 
-```
 
 ```{r correlation}
 # experimental effect ~ stress
@@ -654,6 +641,7 @@ cor.test(merged_df$experimental_effect, merged_df$stress, method = 'spearman') #
 # experimental effect ~ focus
 cor.test(merged_df$experimental_effect, merged_df$focus, method = 'kendall') # significant + negative
 cor.test(merged_df$experimental_effect, merged_df$focus, method = 'spearman') # significant + negative
+
 ```
 
 > We found a significant and positive relationship between experimental_effect (i.e. how different the estimates were before vs after the task) and stress during the lego task. \> So the more stressed you were during the task the more inaccurate your estimates after. We found a significant and negative relationship between experimental_effect (i.e. how different the estimates were before vs after the task) and focus during the lego task. \> So the more focused you were the less inaccurate your estimates after
@@ -661,7 +649,7 @@ cor.test(merged_df$experimental_effect, merged_df$focus, method = 'spearman') # 
 ```{r correlation for condition}
 WRS2::yuen(experimental_effect ~ Condition, 
                           data = merged_df, trim = 0.2) # <.05 sig. relationship
-WRS2::yuen(productivity ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
+WRS2::yuen(productivity ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig. relationship
 WRS2::yuen(button_accuracy ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig.
 WRS2::yuen(stress ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
 WRS2::yuen(focus ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig.
