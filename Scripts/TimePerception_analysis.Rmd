@@ -293,33 +293,33 @@ merged_df %>%
 
 ```{r written estimation}
 # Calculate mean baseline accuracy for each ID
-baseline_df <- merged_df %>% 
+baseline_df_written <- merged_df %>% 
   filter(Phase == "baseline") %>% 
   group_by(ID) %>% 
-  summarise(mean_baseline_accuracy = mean(written_accuracy, na.rm = TRUE))
+  summarise(mean_baseline_accuracy_written = mean(written_accuracy, na.rm = TRUE))
 
 # Calculate mean effect accuracy for each ID
-effect_df <- merged_df %>% 
+effect_df_written <- merged_df %>% 
   filter(Phase == "effect") %>% 
   group_by(ID) %>% 
-  summarise(mean_effect_accuracy = mean(written_accuracy, na.rm = TRUE))
+  summarise(mean_effect_accuracy_written = mean(written_accuracy, na.rm = TRUE))
 
 # Join and calculate the experimental effect
-effect_vs_baseline <- baseline_df %>%
-  left_join(effect_df, by = "ID") %>%
-  mutate(experimental_effect = abs(mean_baseline_accuracy - mean_effect_accuracy))
+effect_vs_baseline_written <- baseline_df_written %>%
+  left_join(effect_df_written, by = "ID") %>%
+  mutate(experimental_effect_written = abs(mean_baseline_accuracy_written - mean_effect_accuracy_written))
 
 # Join this information back to the original merged_df
 # Ensure only necessary columns are included to avoid duplications
 merged_df <- merged_df %>%
-  left_join(select(effect_vs_baseline, ID, mean_baseline_accuracy, mean_effect_accuracy, experimental_effect), by = "ID")
+  left_join(select(effect_vs_baseline_written, ID, mean_baseline_accuracy_written, mean_effect_accuracy_written, experimental_effect_written), by = "ID")
 
 # now we have average accuracy for both baseline and effect for each ID, meaning we have two averages for each ID
 # now we need the average difference across conditions
 
 merged_df %>% 
   group_by(Condition)%>% 
-  summarise(mean(mean_baseline_accuracy), mean(mean_effect_accuracy), mean(experimental_effect)) 
+  summarise(mean(mean_baseline_accuracy_written), mean(mean_effect_accuracy_written), mean(experimental_effect_written)) 
 # lower value means more they underestimated
 
 ```
@@ -598,11 +598,11 @@ norm <- merged_df %>% ggplot(aes(x = written_accuracy)) +
 
 shapiro.test(merged_df$written_accuracy) # also <.05
 
-shapiro.test(merged_df$experimental_effect) # >.05 can be used
+shapiro.test(merged_df$experimental_effect) # <.05
 
 ```
 
-> Can't reject normality.
+> Both are significantly different from normality, therefore we proceed with non-parametric tests.
 
 ## Homogeneity of Variances
 
@@ -649,13 +649,13 @@ cor.test(merged_df$experimental_effect, merged_df$focus, method = 'spearman') # 
 ```{r correlation for condition}
 WRS2::yuen(experimental_effect ~ Condition, 
                           data = merged_df, trim = 0.2) # <.05 sig. relationship
-WRS2::yuen(productivity ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig. relationship
+WRS2::yuen(productivity ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
 WRS2::yuen(button_accuracy ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig.
 WRS2::yuen(stress ~ Condition, data = merged_df, trim = 0.2) # <.05 sig. relationship
 WRS2::yuen(focus ~ Condition, data = merged_df, trim = 0.2) # >.05 not sig.
 ```
 
-> The Yuen test uncovered a significant difference between conditions in experimental_effect and productivity.
+> The Yuen test uncovered a significant difference between conditions in experimental_effect, stress and productivity.
 
 ## Mixed-effects model
 
