@@ -10,8 +10,8 @@ knit: (function(input, encoding) { rmarkdown::render(input, encoding = encoding,
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set(root.dir = "C:/Users/barbo/OneDrive/Počítač/3rd semester/PA/Project/PercAct-Time-Perception")
-knitr::opts_knit$set(root.dir = normalizePath('C:/Users/barbo/OneDrive/Počítač/3rd semester/PA/Project/PercAct-Time-Perception'))
+knitr::opts_knit$set(root.dir = "/Users/gloria/Desktop/PercAct-Time-Perception-main")
+knitr::opts_knit$set(root.dir = normalizePath("/Users/gloria/Desktop/PercAct-Time-Perception-main"))
 
 pacman::p_load(
   tidyverse,
@@ -37,6 +37,8 @@ pacman::p_load(
 ```{r}
 # List CSV files in the Logfiles folder
 files <- list.files("Logfiles", pattern = "\\.csv$", full.names = TRUE)
+
+#df <- do.call(rbind, lapply(files, function(file) read.csv(file, header = TRUE)))
 
 # Read and combine all CSV files
 df <- do.call(rbind, lapply(files, read.csv))
@@ -164,6 +166,32 @@ merged_df <- merged_df %>%
     Condition == 3 ~ models_done / 240
   ))
 
+# make the "task accuracy" variable which is models_correct/models_done
+merged_df <- merged_df %>%
+  mutate(task_accuracy = case_when(
+    Condition == 2 ~ models_correct / models_done,
+    Condition == 1 ~ models_correct / models_done,
+    Condition == 3 ~ models_correct / models_done
+  ))
+
+#Extra: asses another type of productivity that includes task accuracy (I think adjusted productivity might be better than relative productivity but idk)
+
+# make the "adjusted productivity" - taking accuracy into account
+merged_df <- merged_df %>%
+  mutate(adjust_productivity = case_when(
+    Condition == 2 ~ productivity * task_accuracy,
+    Condition == 1 ~ productivity * task_accuracy,
+    Condition == 3 ~ productivity * task_accuracy
+  ))
+
+# make the "relative productivity" - taking accuracy into account
+merged_df <- merged_df %>%
+  mutate(relat_productivity = case_when(
+    Condition == 2 ~ productivity/task_accuracy,
+    Condition == 1 ~ productivity/task_accuracy,
+    Condition == 3 ~ productivity/task_accuracy
+  ))
+
 # make an estimation_effect that shows the difference in time perceptions where negative values mean underestimation (for example in fast condition) and positive mean overestimation (for example in slow condition)
 merged_df <- merged_df %>%
   mutate(button_accuracy = button_estimate - beep_time)
@@ -214,6 +242,42 @@ kable_table
 
 ## Exploratory phase
 
+```{r summarize participant info}
+
+#Participant info: number of female, male, other, mean age, sd age, median age
+participant_info <- merged_df %>%
+  summarise(male_count = sum(Gender == "male", na.rm = TRUE)/12,
+            female_count = sum(Gender == "female", na.rm = TRUE)/12,
+            other_count = sum(Gender == "other", na.rm = TRUE)/12,
+            mean_age = mean(Age),
+            max_age = max(Age),
+            min_age = min(Age),
+            sd_age = sd(Age),
+            median_age = median(Age))
+
+participant_info
+
+#number of participants in each condition by gender (same as the plot after that just differently displayed)
+summary_by_condition <- merged_df %>%
+  group_by(Condition, Gender) %>%
+  distinct(ID) %>%
+  count() %>%
+  mutate(Gender = ifelse(is.na(Gender), "other", Gender)) %>%
+  pivot_wider(names_from = Gender, values_from = n, values_fill = 0) %>%
+  select(-Condition) %>%
+  group_by(Condition) %>%
+  summarise_all(sum)
+
+# Set column names
+colnames(summary_by_condition)[2:4] <- c("female", "male", "other")
+
+summary_by_condition
+
+
+```
+ 
+> The total number of subjects that participated in the study is 30 (15 females, 14 males, 1 other), in the age range from 18 to 26 (M = 21.97, SD = 1.71, Mdn = 22).
+
 ```{r exploratory}
 # number of participants of each gender by condition
 cond1 <- merged_df %>% 
@@ -244,10 +308,23 @@ merged_df %>%
   filter(Condition==2) %>% 
   group_by(Gender) %>% 
   summarise(mean(productivity))
-# mean procudtivity by condition
+
+# mean productivity by gender (overall, in all conditions)
 merged_df %>% 
-  group_by(Condition) %>% 
-  summarise(mean(productivity))
+  group_by(Gender) %>% 
+  summarise(mean_productivity = mean(productivity),
+            mean_adjust_productivity = mean(adjust_productivity),
+            mean_relat_productivity = mean(relat_productivity),
+            mean_task_accuracy = mean(task_accuracy))
+
+# mean procudtivity by condition
+merged_df %>%
+  group_by(Condition) %>%
+  summarise(mean_productivity = mean(productivity),
+            mean_adjust_productivity = mean(adjust_productivity),
+            mean_relat_productivity = mean(relat_productivity),
+            mean_task_accuracy = mean(task_accuracy))
+
 ```
 
 > I need to note that the Fast condition is mostly composed by Female participants. In the control condition, Male participants were slightly more productive. Productivity in the Fast condition jumped by \~0.049 from the control. While it only increased by \~0.004 in the slow condition where participants had more time.
@@ -531,6 +608,13 @@ ggplot(action_means, aes(x = action_numeric, y = mean_estimation)) +
 ```{r}
 merged_df %>% 
 ggplot(aes(x = factor(Condition), y = productivity, fill = Gender)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Productivity by Condition and Gender", x = "Condition", y = "Productivity") +
+  facet_wrap(merged_df$Gender)
+
+merged_df %>% 
+ggplot(aes(x = factor(Condition), y = task_accuracy, fill = Gender)) +
   geom_boxplot() +
   theme_minimal() +
   labs(title = "Productivity by Condition and Gender", x = "Condition", y = "Productivity") +
